@@ -1,0 +1,27 @@
+name: Twitter to Discord
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # runs every 15 minutes
+  workflow_dispatch:        # allows manual run
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          pip3 install requests beautifulsoup4
+
+      - name: Run scraper
+        env:
+          WEBHOOK_AQW_NEWS: ${{ secrets.WEBHOOK_AQW_NEWS }}
+          WEBHOOK_NEW_ITEMS: ${{ secrets.WEBHOOK_NEW_ITEMS }}
+        run: |
+          python3 scraper.py
