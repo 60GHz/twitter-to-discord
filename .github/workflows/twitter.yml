@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # ✅ Persist state.json across runs
+      # Persist state.json across runs
       - name: Restore state cache
         uses: actions/cache@v4
         with:
