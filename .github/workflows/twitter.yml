@@ -2,8 +2,8 @@ name: Twitter to Discord
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # runs every 15 minutes
-  workflow_dispatch:        # allows manual run
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
 
 jobs:
   fetch:
@@ -12,6 +12,13 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      # ✅ Persist state.json across runs
+      - name: Restore state cache
+        uses: actions/cache@v4
+        with:
+          path: state.json
+          key: twitter-state
 
       - name: Install dependencies
         run: |
