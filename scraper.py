@@ -1,9 +1,9 @@
 # scraper.py
 import requests
+import feedparser
 import json
 import os
 import time
-from bs4 import BeautifulSoup
 
 STATE_FILE = "state.json"
 
@@ -11,9 +11,6 @@ USERS = {
     "Alina_AE": os.environ.get("WEBHOOK_AQW_NEWS"),
     "Datenshi6699": os.environ.get("WEBHOOK_NEW_ITEMS"),
 }
-
-WORKER = os.environ.get("WORKER_URL", "").rstrip("/")
-HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -25,51 +22,23 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-def fetch_latest_from_worker(username):
-    if not WORKER:
-        print("[ERROR] WORKER_URL missing")
+def fetch_latest_from_rss(username):
+    rss_url = f"https://nitter.cz/{username}/rss"
+    try:
+        feed = feedparser.parse(rss_url)
+    except Exception as e:
+        print(f"[ERROR] RSS fetch failed for {username}: {e}")
         return None
 
-    url = f"{WORKER}/?user={username}"
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-    except Exception as e:
-        print(f"[ERROR] worker request failed for {username}: {e}")
+    if not feed.entries:
+        print(f"[INFO] no RSS entries for {username}")
         return None
 
-    method = data.get("method")
-    result = data.get("result", {})
-    html = result.get("body", "")
-
-    # --- Case 1: Nitter worked and gave timeline ---
-    if method == "nitter":
-        soup = BeautifulSoup(html, "html.parser")
-        link = soup.select_one("a.tweet-link")
-        if link and link.get("href"):
-            href = link["href"].split("#")[0]
-            return "https://x.com" + href if href.startswith("/") else href
-
-        print(f"[INFO] Nitter returned non-timeline page for {username}")
-
-    # --- Case 2: fallback to vxtwitter ---
-    print(f"[FALLBACK] using vxtwitter for {username}")
-    vx_url = f"https://vxtwitter.com/{username}"
-
-    try:
-        vx = requests.get(vx_url, headers=HEADERS, timeout=15, allow_redirects=True)
-        # vxtwitter redirects to twitter.com/<user>
-        if vx.url.startswith("https://twitter.com") or vx.url.startswith("https://x.com"):
-            return vx.url
-    except Exception as e:
-        print(f"[ERROR] vxtwitter failed for {username}: {e}")
-
-    return None
+    entry = feed.entries[0]
+    return entry.link
 
 def post_to_discord(webhook, text):
     if not webhook:
-        print("[ERROR] missing webhook")
         return
     r = requests.post(webhook, json={"content": text}, timeout=15)
     print(f"[DISCORD] status {r.status_code}")
@@ -81,7 +50,7 @@ def main():
 
     for user, webhook in USERS.items():
         print(f"[CHECK] {user}")
-        latest = fetch_latest_from_worker(user)
+        latest = fetch_latest_from_rss(user)
         if not latest:
             continue
 
