@@ -35,6 +35,11 @@ def fetch_latest_tweet(username):
 def post_to_discord(webhook, text):
     if not webhook:
         return
+
+    # Convert nitter → x.com for proper embeds
+    if text.startswith("https://nitter.net/"):
+        text = text.replace("https://nitter.net/", "https://x.com/")
+
     r = requests.post(webhook, json={"content": text}, timeout=15)
     print(f"[DISCORD] status {r.status_code}")
 
