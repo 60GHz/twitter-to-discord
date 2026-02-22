@@ -46,18 +46,13 @@ def fetch_latest_from_worker(username):
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Find the first tweet in the timeline
-    tweet = soup.select_one("div.timeline-item")
-    if not tweet:
-        print(f"[INFO] no timeline-item found for {username}")
-        return None
-
-    link = tweet.select_one("a.tweet-link")
+    # Most reliable: first tweet-link on the page
+    link = soup.select_one("a.tweet-link")
     if not link or not link.get("href"):
-        print(f"[INFO] no tweet-link anchor for {username}")
+        print(f"[INFO] no tweet-link found for {username}")
         return None
 
-    href = link["href"].split("#")[0]  # remove #m
+    href = link["href"].split("#")[0]
     if href.startswith("/"):
         return "https://x.com" + href
 
