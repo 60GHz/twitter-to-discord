@@ -3,14 +3,12 @@ import requests
 import json
 import os
 import time
-from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
 
 STATE_FILE = "state.json"
 
-WEBHOOKS = {
+USERS = {
     "Alina_AE": os.environ.get("WEBHOOK_AQW_NEWS"),
-    "Datenshi6699": os.environ.get("WEBHOOK_NEW_ITEMS")
+    "Datenshi6699": os.environ.get("WEBHOOK_NEW_ITEMS"),
 }
 
 WORKER = os.environ.get("WORKER_URL", "").rstrip("/")
@@ -27,70 +25,49 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-def fetch_via_worker(target_url):
+def fetch_latest_from_worker(username):
     if not WORKER:
-        print("[WARN] WORKER_URL not configured")
-        return None
-    fetch_url = f"{WORKER}/?url={quote_plus(target_url)}"
-    try:
-        r = requests.get(fetch_url, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        return r.text
-    except Exception as e:
-        print(f"[ERROR] worker fetch failed for {target_url}: {e}")
+        print("[ERROR] WORKER_URL missing")
         return None
 
-def parse_nitter(html):
-    soup = BeautifulSoup(html, "html.parser")
-    # common nitter timeline item selector
-    item = soup.select_one("div.timeline-item")
-    if not item:
-        # fallback: some nitter instances use article.timeline-item or li
-        item = soup.select_one("article.timeline-item, li.timeline-item")
-    if not item:
+    url = f"{WORKER}/?user={username}"
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        print(f"[ERROR] worker request failed for {username}: {e}")
         return None
-    link = item.select_one("a.tweet-link")
-    if not link or not link.get("href"):
-        # fallback: some instances use data-link or relative anchors
-        link = item.find("a", href=True)
-    if not link or not link.get("href"):
-        return None
-    href = link.get("href")
-    if href.startswith("/"):
-        return "https://x.com" + href
-    return href if href.startswith("http") else "https://x.com" + href
+
+    # We only care about the URL returned by the worker result
+    result = data.get("result", {})
+    body = result.get("body", "").lower()
+
+    # Extract first tweet link from nitter HTML
+    import re
+    match = re.search(r'href="(/[^"]+/status/\d+)"', result.get("body", ""))
+    if match:
+        return "https://x.com" + match.group(1)
+
+    print(f"[INFO] no tweet link found for {username}")
+    return None
 
 def post_to_discord(webhook, text):
     if not webhook:
-        print("[ERROR] no webhook provided")
+        print("[ERROR] missing webhook")
         return
-    try:
-        r = requests.post(webhook, json={"content": text}, timeout=15)
-        print(f"[DISCORD] posted {r.status_code}")
-    except Exception as e:
-        print(f"[ERROR] posting to discord failed: {e}")
+    r = requests.post(webhook, json={"content": text}, timeout=15)
+    print(f"[DISCORD] status {r.status_code}")
 
 def main():
     print("=== START SCRAPER ===")
     state = load_state()
     updated = False
 
-    for user, webhook in WEBHOOKS.items():
+    for user, webhook in USERS.items():
         print(f"[CHECK] {user}")
-        nitter_url = f"https://nitter.cz/{user}"
-        html = fetch_via_worker(nitter_url)
-        if not html:
-            print(f"[WARN] no HTML from worker for {user}")
-            # try an alternate nitter instance if worker returned nothing
-            alt = fetch_via_worker(f"https://nitter.net/{user}")
-            if alt:
-                html = alt
-            else:
-                continue
-
-        latest = parse_nitter(html)
+        latest = fetch_latest_from_worker(user)
         if not latest:
-            print(f"[INFO] no timeline item found for {user}")
             continue
 
         if state.get(user) != latest:
@@ -105,6 +82,7 @@ def main():
 
     if updated:
         save_state(state)
+
     print("=== FINISHED ===")
 
 if __name__ == "__main__":
