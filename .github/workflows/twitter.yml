@@ -25,6 +25,9 @@ jobs:
           sudo apt-get install -y python3 python3-pip
           pip3 install requests feedparser
 
+      - name: Migrate state.json (one-time)
+        run: python3 migrate_state.py
+
       - name: Run scraper
         env:
           WEBHOOK_AQW_NEWS: ${{ secrets.WEBHOOK_AQW_NEWS }}
