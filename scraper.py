@@ -3,6 +3,7 @@ import requests
 import json
 import os
 import time
+from bs4 import BeautifulSoup
 
 STATE_FILE = "state.json"
 
@@ -12,7 +13,6 @@ USERS = {
 }
 
 WORKER = os.environ.get("WORKER_URL", "").rstrip("/")
-
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 def load_state():
@@ -39,18 +39,29 @@ def fetch_latest_from_worker(username):
         print(f"[ERROR] worker request failed for {username}: {e}")
         return None
 
-    # We only care about the URL returned by the worker result
-    result = data.get("result", {})
-    body = result.get("body", "").lower()
+    html = data.get("result", {}).get("body")
+    if not html:
+        print(f"[INFO] no HTML body for {username}")
+        return None
 
-    # Extract first tweet link from nitter HTML
-    import re
-    match = re.search(r'href="(/[^"]+/status/\d+)"', result.get("body", ""))
-    if match:
-        return "https://x.com" + match.group(1)
+    soup = BeautifulSoup(html, "html.parser")
 
-    print(f"[INFO] no tweet link found for {username}")
-    return None
+    # Find the first tweet in the timeline
+    tweet = soup.select_one("div.timeline-item")
+    if not tweet:
+        print(f"[INFO] no timeline-item found for {username}")
+        return None
+
+    link = tweet.select_one("a.tweet-link")
+    if not link or not link.get("href"):
+        print(f"[INFO] no tweet-link anchor for {username}")
+        return None
+
+    href = link["href"].split("#")[0]  # remove #m
+    if href.startswith("/"):
+        return "https://x.com" + href
+
+    return href
 
 def post_to_discord(webhook, text):
     if not webhook:
