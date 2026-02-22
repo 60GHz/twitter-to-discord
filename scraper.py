@@ -1,6 +1,6 @@
 # scraper.py
-import requests
 import feedparser
+import requests
 import json
 import os
 import time
@@ -22,20 +22,15 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-def fetch_latest_from_rss(username):
-    rss_url = f"https://nitter.cz/{username}/rss"
-    try:
-        feed = feedparser.parse(rss_url)
-    except Exception as e:
-        print(f"[ERROR] RSS fetch failed for {username}: {e}")
-        return None
+def fetch_latest_tweet(username):
+    rss_url = f"https://nitter.net/{username}/rss"
+    feed = feedparser.parse(rss_url)
 
     if not feed.entries:
         print(f"[INFO] no RSS entries for {username}")
         return None
 
-    entry = feed.entries[0]
-    return entry.link
+    return feed.entries[0].link
 
 def post_to_discord(webhook, text):
     if not webhook:
@@ -50,7 +45,7 @@ def main():
 
     for user, webhook in USERS.items():
         print(f"[CHECK] {user}")
-        latest = fetch_latest_from_rss(user)
+        latest = fetch_latest_tweet(user)
         if not latest:
             continue
 
