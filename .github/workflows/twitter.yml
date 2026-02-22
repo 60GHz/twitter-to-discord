@@ -32,3 +32,23 @@ jobs:
           WORKER_URL: ${{ secrets.WORKER_URL }}
         run: |
           python3 scraper.py
+
+      - name: Commit updated state.json (if changed)
+        if: ${{ always() }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # if state.json doesn't exist, skip
+          if [ -f state.json ]; then
+            git add state.json
+            if ! git diff --staged --quiet; then
+              git commit -m "Update state.json [ci skip]" || echo "commit failed"
+              git push origin HEAD:${{ github.ref_name }} || echo "push failed"
+            else
+              echo "No changes to state.json"
+            fi
+          else
+            echo "state.json not found, nothing to commit"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
