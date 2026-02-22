@@ -1,0 +1,44 @@
+name: Diagnose network access
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print environment
+        run: |
+          echo "Running diagnose on $(hostname)"
+          env
+
+      - name: Check curl available
+        run: curl --version || true
+
+      - name: Test Nitter (nitter.net)
+        run: |
+          echo "---- nitter.net /Alina_AE ----"
+          curl -I -L -sS https://nitter.net/Alina_AE || true
+          echo "---- GET (first 600 bytes) ----"
+          curl -sS -L https://nitter.net/Alina_AE | head -c 600 || true
+
+      - name: Test nitter.poast.org
+        run: |
+          echo "---- nitter.poast.org /Alina_AE ----"
+          curl -I -L -sS https://nitter.poast.org/Alina_AE || true
+          echo "---- GET (first 600 bytes) ----"
+          curl -sS -L https://nitter.poast.org/Alina_AE | head -c 600 || true
+
+      - name: Test RSSHub (rsshub.app)
+        run: |
+          echo "---- rsshub.app /twitter/user/Alina_AE ----"
+          curl -I -L -sS https://rsshub.app/twitter/user/Alina_AE || true
+          echo "---- GET (first 600 bytes) ----"
+          curl -sS -L https://rsshub.app/twitter/user/Alina_AE | head -c 600 || true
+
+      - name: Test r.jina.ai proxy of nitter
+        run: |
+          echo "---- r.jina.ai proxy of nitter.net/Alina_AE ----"
+          curl -I -L -sS https://r.jina.ai/http://nitter.net/Alina_AE || true
+          echo "---- GET (first 600 bytes) ----"
+          curl -sS -L https://r.jina.ai/http://nitter.net/Alina_AE | head -c 600 || true
