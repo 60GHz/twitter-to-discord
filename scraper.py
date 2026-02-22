@@ -39,24 +39,33 @@ def fetch_latest_from_worker(username):
         print(f"[ERROR] worker request failed for {username}: {e}")
         return None
 
-    html = data.get("result", {}).get("body")
-    if not html:
-        print(f"[INFO] no HTML body for {username}")
-        return None
+    method = data.get("method")
+    result = data.get("result", {})
+    html = result.get("body", "")
 
-    soup = BeautifulSoup(html, "html.parser")
+    # --- Case 1: Nitter worked and gave timeline ---
+    if method == "nitter":
+        soup = BeautifulSoup(html, "html.parser")
+        link = soup.select_one("a.tweet-link")
+        if link and link.get("href"):
+            href = link["href"].split("#")[0]
+            return "https://x.com" + href if href.startswith("/") else href
 
-    # Most reliable: first tweet-link on the page
-    link = soup.select_one("a.tweet-link")
-    if not link or not link.get("href"):
-        print(f"[INFO] no tweet-link found for {username}")
-        return None
+        print(f"[INFO] Nitter returned non-timeline page for {username}")
 
-    href = link["href"].split("#")[0]
-    if href.startswith("/"):
-        return "https://x.com" + href
+    # --- Case 2: fallback to vxtwitter ---
+    print(f"[FALLBACK] using vxtwitter for {username}")
+    vx_url = f"https://vxtwitter.com/{username}"
 
-    return href
+    try:
+        vx = requests.get(vx_url, headers=HEADERS, timeout=15, allow_redirects=True)
+        # vxtwitter redirects to twitter.com/<user>
+        if vx.url.startswith("https://twitter.com") or vx.url.startswith("https://x.com"):
+            return vx.url
+    except Exception as e:
+        print(f"[ERROR] vxtwitter failed for {username}: {e}")
+
+    return None
 
 def post_to_discord(webhook, text):
     if not webhook:
