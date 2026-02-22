@@ -5,6 +5,7 @@ import json
 import os
 import time
 import tempfile
+import re
 from urllib.parse import urlparse
 
 STATE_FILE = "state.json"
@@ -14,14 +15,13 @@ USERS = {
     "Datenshi6699": os.environ.get("WEBHOOK_NEW_ITEMS"),
 }
 
-FEED_BASE = "https://nitter.net"  # keep nitter.net as canonical RSS provider
-
-# TEST mode: if set (non-empty), the scraper will post but won't update state.json
+FEED_BASE = "https://nitter.net"  # RSS provider
 TEST_MODE = os.environ.get("TEST_MODE", "").lower() in ("1", "true", "yes")
-# Optionally set TEST_PREFIX to include in test posts (defaults to [TEST])
 TEST_PREFIX = os.environ.get("TEST_PREFIX", "[TEST]")
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+ID_RE = re.compile(r"/status/(\d+)")
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -30,47 +30,84 @@ def load_state():
     return {}
 
 def atomic_write_state(state):
-    # write atomically to avoid partial writes
     tfd, tmp = tempfile.mkstemp(dir=".", prefix="state.", text=True)
     with os.fdopen(tfd, "w") as f:
         json.dump(state, f)
     os.replace(tmp, STATE_FILE)
 
-def canonicalize_link(url):
-    """Turn nitter links into canonical x.com status links and strip fragments/queries."""
+def canonicalize_to_x(url):
+    """Return canonical x.com status URL (strip fragment/query)."""
     if not url:
-        return None
-    # remove fragment and query
+        return url
     p = urlparse(url)
     path = p.path.rstrip("/")
-    # if nitter link like /User/status/123 or full nitter url:
-    # extract username/status/... and return https://x.com/username/status/123
-    # there are variations (nitter.net vs nitter.cz), handle generically
+    # if nitter links or other instances, just use path with x.com
     if "nitter." in p.netloc or "nitter" in p.netloc:
-        # path likely like '/User/status/123'
         return "https://x.com" + path
-    # if it's already twitter/x
+    # if twitter/x already
     if "twitter.com" in p.netloc or "x.com" in p.netloc:
         return p.scheme + "://" + p.netloc + path
-    # fallback: return the given url without fragment/query
+    # fallback
     return p.scheme + "://" + p.netloc + path
+
+def extract_id_from_url(url):
+    """Extract numeric status id from a URL. Return int or None."""
+    if not url:
+        return None
+    m = ID_RE.search(url)
+    if m:
+        try:
+            return int(m.group(1))
+        except:
+            return None
+    # sometimes feed provides an 'id' field that's a number or urn, try that
+    digits = re.search(r"(\d{5,})", url)
+    if digits:
+        try:
+            return int(digits.group(1))
+        except:
+            return None
+    return None
 
 def fetch_feed_entries(username):
     rss_url = f"{FEED_BASE}/{username}/rss"
     feed = feedparser.parse(rss_url)
+    entries = []
     if not feed or not getattr(feed, "entries", None):
-        return []
-    # feed.entries is newest-first; we want to handle them properly
-    return feed.entries
+        return entries
+    for e in feed.entries:
+        link = e.get("link") or e.get("id") or ""
+        cid = extract_id_from_url(link)
+        canonical = canonicalize_to_x(link)
+        # Also attempt extraction from 'links' / 'guid' variations
+        if cid is None:
+            # try e.get('links') if present
+            links = e.get("links", [])
+            for L in links:
+                href = L.get("href")
+                c2 = extract_id_from_url(href) if href else None
+                if c2:
+                    cid = c2
+                    canonical = canonicalize_to_x(href)
+                    break
+        if cid:
+            entries.append({"id": cid, "link": canonical})
+    # dedupe by id preserving first occurrence
+    seen = set()
+    uniq = []
+    for it in entries:
+        if it["id"] not in seen:
+            uniq.append(it)
+            seen.add(it["id"])
+    return uniq
 
 def post_to_discord(webhook, link, is_test=False):
     if not webhook:
         print("[ERROR] missing webhook")
         return False
     post_link = link
-    # convert nitter -> x link (redundant if we canonicalized, but safe)
-    if post_link.startswith("https://nitter."):
-        post_link = post_link.replace("https://nitter.net/", "https://x.com/").replace("https://nitter.cz/", "https://x.com/")
+    # ensure x.com
+    post_link = post_link.replace("https://nitter.net/", "https://x.com/").replace("https://nitter.cz/", "https://x.com/")
     content = f"{TEST_PREFIX} {post_link}" if is_test else post_link
     try:
         r = requests.post(webhook, json={"content": content}, timeout=15)
@@ -86,62 +123,50 @@ def process_user(username, webhook, state, posted_this_run):
         print(f"[INFO] no RSS entries for {username}")
         return False
 
-    # compute canonical links list in newest->oldest order
-    canonical_links = []
-    for e in entries:
-        link = e.get("link") or e.get("id") or ""
-        c = canonicalize_link(link)
-        if c:
-            canonical_links.append(c)
+    # entries may be newest-first or in feed order; build id-sorted ascending list
+    entries_sorted = sorted(entries, key=lambda x: x["id"])  # oldest -> newest
 
-    if not canonical_links:
-        print(f"[INFO] no links found in RSS for {username}")
-        return False
-
-    last_seen = state.get(username)
-    # If last_seen exists, find it in the list; else, we will only post the latest (avoid floods)
-    if last_seen:
-        # find index of last_seen in canonical_links
+    last_seen_id = None
+    if state.get(username):
         try:
-            idx = canonical_links.index(last_seen)
-            # everything before idx (0..idx-1) are newer items (newest->older)
-            new_links = canonical_links[:idx]
-        except ValueError:
-            # last_seen not found -> maybe state had old formatting; to be safe, post only the newest
-            new_links = canonical_links[:1]
-    else:
-        # first-time run: post only the latest to avoid backfilling hundreds
-        new_links = canonical_links[:1]
+            last_seen_id = int(state.get(username))
+        except:
+            last_seen_id = None
 
-    if not new_links:
+    # Determine which entries to post
+    if last_seen_id:
+        # post entries with id > last_seen_id
+        new_entries = [e for e in entries_sorted if e["id"] > last_seen_id]
+    else:
+        # first run: post only the latest item (avoid backfill)
+        new_entries = entries_sorted[-1:] if entries_sorted else []
+
+    if not new_entries:
         print(f"[OK] no new post for {username}")
         return False
 
-    # We have new links in newest->oldest order. Post oldest-first for correct timeline.
-    new_links_to_post = list(reversed(new_links))
-
+    # Post oldest -> newest (entries_sorted already oldest->newest; new_entries keeps that order)
     any_posted = False
-    for link in new_links_to_post:
-        if link in posted_this_run:
-            print(f"[SKIP] already posted this run: {link}")
+    for entry in new_entries:
+        if entry["id"] in posted_this_run:
+            print(f"[SKIP] already posted this run: {entry['id']}")
             continue
-        success = post_to_discord(webhook, link, is_test=TEST_MODE)
+        success = post_to_discord(webhook, entry["link"], is_test=TEST_MODE)
         if success:
-            posted_this_run.add(link)
+            posted_this_run.add(entry["id"])
             any_posted = True
         else:
-            print(f"[WARN] failed to post {link}; will not update state for it")
-            # on failure we stop further posts to avoid partial state updates
+            # If a post failed, stop and do not update state to avoid partial update
+            print(f"[WARN] failed to post {entry['link']}; stopping further posts for {username}")
             break
 
-    # if we are not in test mode and we posted at least one, update state to newest posted link
     if any_posted and not TEST_MODE:
-        newest_posted = new_links[0]  # new_links was newest->oldest, index 0 is newest
-        state[username] = newest_posted
-    elif not any_posted:
-        # nothing posted
-        pass
-
+        # update the state to the highest id posted (newest)
+        max_posted_id = max(posted_this_run) if posted_this_run else None
+        # but we only want the max for this user, so compute from new_entries
+        newest_posted_id = max(e["id"] for e in new_entries) if new_entries else None
+        if newest_posted_id:
+            state[username] = str(newest_posted_id)
     return any_posted
 
 def main():
@@ -158,7 +183,6 @@ def main():
         time.sleep(1)
 
     if updated and not TEST_MODE:
-        # atomically write state and keep it for next runs
         atomic_write_state(state)
         print("[STATE] state.json updated")
     else:
