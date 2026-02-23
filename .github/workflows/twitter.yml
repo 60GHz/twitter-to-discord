@@ -23,7 +23,6 @@ jobs:
         env:
           WEBHOOK_AQW_NEWS: ${{ secrets.WEBHOOK_AQW_NEWS }}
           WEBHOOK_NEW_ITEMS: ${{ secrets.WEBHOOK_NEW_ITEMS }}
-          WORKER_URL: ${{ secrets.WORKER_URL }}
         run: |
           python3 scraper.py
 
